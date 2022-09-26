@@ -7,3 +7,4 @@
 
 # composer vendor files
 vendor/
+docker/mysql/data/
