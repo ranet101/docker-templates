@@ -1,0 +1,124 @@
+version: '3.5'
+
+networks:
+  frontend:
+    driver: ${NETWORKS_DRIVER}
+  backend:
+    driver: ${NETWORKS_DRIVER}
+
+volumes:
+  docker-in-docker:
+    driver: ${VOLUMES_DRIVER}
+
+services:
+
+  workspace:
+    build:
+      context: ./docker/workspace
+      args:
+        - PHP_VERSION=${PHP_VERSION}
+        - INSTALL_MONGO=${WORKSPACE_INSTALL_MONGO}
+        - INSTALL_NODE=${WORKSPACE_INSTALL_NODE}
+        - COMPOSER_GLOBAL_INSTALL=${WORKSPACE_COMPOSER_GLOBAL_INSTALL}
+        - COMPOSER_VERSION=${WORKSPACE_COMPOSER_VERSION}
+        - NODE_VERSION=${WORKSPACE_NODE_VERSION}
+    volumes:
+      - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}
+      - docker-in-docker:/certs/client
+      #- ./php-worker/supervisord.d:/etc/supervisord.d
+    #extra_hosts:
+      #- "dockerhost:${DOCKER_HOST_IP}"
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "8080:8080"
+      - "8001:8000"
+    tty: true
+    environment:
+      #- PHP_IDE_CONFIG=${PHP_IDE_CONFIG}
+      - DOCKER_HOST=tcp://docker-in-docker:2376
+      - DOCKER_TLS_VERIFY=1
+      - DOCKER_TLS_CERTDIR=/certs
+      - DOCKER_CERT_PATH=/certs/client
+      - CHOKIDAR_USEPOLLING=true
+    networks:
+      - frontend
+      - backend
+    links:
+      - docker-in-docker
+
+  docker-in-docker:
+    image: docker:20.10-dind
+    environment:
+      DOCKER_TLS_SAN: DNS:docker-in-docker
+    privileged: true
+    volumes:
+      - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}
+      - docker-in-docker:/certs/client
+    expose:
+      - 2375
+    networks:
+      - backend
+
+  apache2:
+    build:
+      context: ./docker/apache2
+      args:
+        - DOCUMENT_ROOT=${APACHE_DOCUMENT_ROOT}
+    volumes:
+      - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}
+      - ${APACHE_HOST_LOG_PATH}:/var/log/apache2
+      - ${APACHE_SITES_PATH}:/etc/apache2/sites-available
+      - ${APACHE_SSL_PATH}:/etc/apache2/ssl
+    ports:
+      - "${APACHE_HOST_HTTP_PORT}:80"
+      - "${APACHE_HOST_HTTPS_PORT}:443"
+    depends_on:
+      - php-fpm
+    networks:
+      - frontend
+      - backend
+
+  php-fpm:
+    build:
+      context: ./docker/php-fpm
+      args:
+        - php_version=${PHP_VERSION}
+        - INSTALL_MONGO=${PHP_FPM_INSTALL_MONGO}
+    volumes:
+      - ./docker/php-fpm/php${PHP_VERSION}.ini:/usr/local/etc/php/php.ini
+      - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}
+      - docker-in-docker:/certs/client
+    expose:
+      - "9000"
+    #extra_hosts:
+      #- "dockerhost:${DOCKER_HOST_IP}"
+    environment:
+      - DOCKER_HOST=tcp://docker-in-docker:2376
+      - DOCKER_TLS_VERIFY=1
+      - DOCKER_TLS_CERTDIR=/certs
+      - DOCKER_CERT_PATH=/certs/client
+      - FAKETIME=-0
+    depends_on:
+      - workspace
+    networks:
+      - backend
+    links:
+      - docker-in-docker
+
+  mongo:
+    build:
+      context: ./docker/mongo
+      args:
+        mongo_version: ${MONGO_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME}-mongo
+    ports:
+      - "${MONGODB_PORT}:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD}
+    volumes:
+      - ./docker/mongo/data:/data/db
+      - ./docker/mongo/config:/data/configdb
+    networks:
+      - backend
